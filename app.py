@@ -139,7 +139,7 @@ except (AttributeError, FileNotFoundError, ImportError, RuntimeError):
     config_source = "環境変数"
 
 st.sidebar.text(f"設定元: {config_source}")
-st.sidebar.text(f"ベースURL: {base_url}")
+# セキュリティのため、ベースURLは表示しない
 st.sidebar.text(f"モデル: {model}")
 
 # --- 描画と履歴管理ロジック ---
