@@ -1,0 +1,25 @@
+[
+    {
+        "nodes": [
+            {
+                "id": "start",
+                "label": "開始",
+                "type": "start",
+                "status": "active"
+            },
+            {
+                "id": "node_end",
+                "label": "終了",
+                "type": "end",
+                "status": "active"
+            }
+        ],
+        "edges": [
+            {
+                "source": "start",
+                "target": "node_end",
+                "label": null
+            }
+        ]
+    }
+]

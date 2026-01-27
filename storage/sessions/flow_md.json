@@ -1,0 +1,369 @@
+[
+    {
+        "nodes": [
+            {
+                "id": "start",
+                "label": "開始",
+                "type": "start",
+                "status": "active"
+            },
+            {
+                "id": "task1",
+                "label": "モジュールをサンプル（異常なしモジュール）に交換",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task2",
+                "label": "症状が再現するか確認",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "decision1",
+                "label": "症状が再現するか？",
+                "type": "decision",
+                "status": "active"
+            },
+            {
+                "id": "task3",
+                "label": "症状が再現する場合の処理",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "decision2",
+                "label": "症状の種類を判定",
+                "type": "decision",
+                "status": "active"
+            },
+            {
+                "id": "task4",
+                "label": "表示がおかしい",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "decision3",
+                "label": "表示の問題の詳細を判定",
+                "type": "decision",
+                "status": "active"
+            },
+            {
+                "id": "task5",
+                "label": "両側の表示がおかしい",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task6",
+                "label": "片側の表示がおかしい",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task7",
+                "label": "両側・片側の対応をしても改善されない",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task8",
+                "label": "データがおかしい",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task9",
+                "label": "症状:再現しなかったJARVISを流動に戻したが、1週間以内に再度出てきた",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task10",
+                "label": "流動に戻す",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "node_end",
+                "label": "終了",
+                "type": "end",
+                "status": "active"
+            },
+            {
+                "id": "task11_1",
+                "label": "PG基板を交換する",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task12_1",
+                "label": "モジュールボード基板を交換する",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task13_1",
+                "label": "モジュールコンタクト基板を交換する",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task13_2",
+                "label": "モジュールコンタクト基板を交換する",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task11_2",
+                "label": "PG基板を交換する",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task12_2",
+                "label": "モジュールボード基板を交換する",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task14_1",
+                "label": "JARVIS内部のFFCを交換してください。",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task15_1",
+                "label": "裏側のユニバーサルコンタクト基板を交換してください。",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task16_1",
+                "label": "JARVIS内部のケーブルを交換してください。",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task17_1",
+                "label": "MK.Ⅱ(信号発生機)を再起動してください。",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task11_3",
+                "label": "PG基板を交換する",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task12_3",
+                "label": "モジュールボード基板を交換する",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task14_2",
+                "label": "JARVIS内部のFFCを交換してください。",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task15_2",
+                "label": "裏側のユニバーサルコンタクト基板を交換してください。",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task16_2",
+                "label": "JARVIS内部のケーブルを交換してください。",
+                "type": "process",
+                "status": "active"
+            },
+            {
+                "id": "task17_2",
+                "label": "MK.Ⅱ(信号発生機)を再起動してください。",
+                "type": "process",
+                "status": "active"
+            }
+        ],
+        "edges": [
+            {
+                "source": "start",
+                "target": "task1",
+                "label": null
+            },
+            {
+                "source": "task1",
+                "target": "task2",
+                "label": null
+            },
+            {
+                "source": "task2",
+                "target": "decision1",
+                "label": null
+            },
+            {
+                "source": "decision1",
+                "target": "task10",
+                "label": "再現しない"
+            },
+            {
+                "source": "task10",
+                "target": "node_end",
+                "label": null
+            },
+            {
+                "source": "decision1",
+                "target": "task3",
+                "label": "再現する"
+            },
+            {
+                "source": "task3",
+                "target": "decision2",
+                "label": null
+            },
+            {
+                "source": "decision2",
+                "target": "task4",
+                "label": "1：表示がおかしい"
+            },
+            {
+                "source": "decision2",
+                "target": "task8",
+                "label": "2：データがおかしい"
+            },
+            {
+                "source": "decision2",
+                "target": "task9",
+                "label": "3：再現しなかったJARVISを流動に戻したが、1週間以内に再度出てきた"
+            },
+            {
+                "source": "task9",
+                "target": "node_end",
+                "label": null
+            },
+            {
+                "source": "task4",
+                "target": "decision3",
+                "label": null
+            },
+            {
+                "source": "decision3",
+                "target": "task5",
+                "label": "両側の表示がおかしい"
+            },
+            {
+                "source": "decision3",
+                "target": "task6",
+                "label": "片側の表示がおかしい"
+            },
+            {
+                "source": "decision3",
+                "target": "task7",
+                "label": "両側・片側の対応をしても改善されない"
+            },
+            {
+                "source": "task5",
+                "target": "task11_1",
+                "label": null
+            },
+            {
+                "source": "task11_1",
+                "target": "task12_1",
+                "label": null
+            },
+            {
+                "source": "task12_1",
+                "target": "task13_1",
+                "label": null
+            },
+            {
+                "source": "task13_1",
+                "target": "node_end",
+                "label": null
+            },
+            {
+                "source": "task6",
+                "target": "task13_2",
+                "label": null
+            },
+            {
+                "source": "task13_2",
+                "target": "task11_2",
+                "label": null
+            },
+            {
+                "source": "task11_2",
+                "target": "task12_2",
+                "label": null
+            },
+            {
+                "source": "task12_2",
+                "target": "node_end",
+                "label": null
+            },
+            {
+                "source": "task7",
+                "target": "task14_1",
+                "label": null
+            },
+            {
+                "source": "task14_1",
+                "target": "task15_1",
+                "label": null
+            },
+            {
+                "source": "task15_1",
+                "target": "task16_1",
+                "label": null
+            },
+            {
+                "source": "task16_1",
+                "target": "task17_1",
+                "label": null
+            },
+            {
+                "source": "task17_1",
+                "target": "node_end",
+                "label": null
+            },
+            {
+                "source": "task8",
+                "target": "task11_3",
+                "label": null
+            },
+            {
+                "source": "task11_3",
+                "target": "task12_3",
+                "label": null
+            },
+            {
+                "source": "task12_3",
+                "target": "task14_2",
+                "label": null
+            },
+            {
+                "source": "task14_2",
+                "target": "task15_2",
+                "label": null
+            },
+            {
+                "source": "task15_2",
+                "target": "task16_2",
+                "label": null
+            },
+            {
+                "source": "task16_2",
+                "target": "task17_2",
+                "label": null
+            },
+            {
+                "source": "task17_2",
+                "target": "node_end",
+                "label": null
+            }
+        ]
+    }
+]

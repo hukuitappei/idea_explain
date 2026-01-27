@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.5/dist/mermaid.min.js"></script>
+    <style>
+        body { margin: 0; background: white; overflow: auto; }
+        #container { display: flex; justify-content: center; padding: 20px; min-height: 100%; }
+        #graph { width: 100%; overflow: auto; }
+        svg { max-width: 100%; height: auto; display: block; }
+        .subgraph-title { cursor: pointer; }
+        .subgraph-title:hover { opacity: 0.7; }
+        .subgraph-collapsed .subgraph-content { display: none; }
+        .node-selected { 
+            stroke: #ff6b6b !important; 
+            stroke-width: 3px !important; 
+            filter: drop-shadow(0 0 5px rgba(255, 107, 107, 0.5));
+        }
+        .node-clickable { cursor: pointer; }
+        .node-clickable:hover { opacity: 0.8; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="graph"></div>
+    </div>
+    <script>
+        mermaid.initialize({ startOnLoad: false, theme: 'default' });
+
+        // ノードIDを抽出する関数
+        function extractNodeId(nodeElement) {
+            // Mermaid.jsの構造: g.node要素内のtext要素からノードIDを取得
+            // ノードIDは通常、text要素の最初のtspanまたはtextContentに含まれる
+            const textElement = nodeElement.querySelector('text');
+            if (!textElement) return null;
+            
+            // ノードIDは通常、Mermaidの内部IDとしてg要素のid属性に含まれる
+            // または、text要素の内容から推測する
+            // Mermaid.jsの構造: g.node[id="flowchart-node-id"]
+            const nodeId = nodeElement.getAttribute('id');
+            if (nodeId) {
+                // MermaidのID形式から実際のノードIDを抽出
+                // 例: "flowchart-node-id" -> "node-id"
+                const match = nodeId.match(/flowchart-([^-]+(?:-[^-]+)*)/);
+                if (match) {
+                    return match[1];
+                }
+                // 別の形式: 直接IDが含まれている場合
+                return nodeId.replace('flowchart-', '');
+            }
+            
+            // フォールバック: text要素の内容から推測（最初の行をIDとして使用）
+            const textContent = textElement.textContent || '';
+            const firstLine = textContent.split('\n')[0].trim();
+            return firstLine || null;
+        }
+        
+        // ノードのハイライト表示を切り替える関数
+        function toggleNodeHighlight(nodeElement) {
+            const rect = nodeElement.querySelector('rect, circle, polygon');
+            if (rect) {
+                if (rect.classList.contains('node-selected')) {
+                    rect.classList.remove('node-selected');
+                } else {
+                    rect.classList.add('node-selected');
+                }
+            }
+        }
+        
+        // ノードクリックイベントを追加する関数
+        function addNodeClickHandler(svgElement) {
+            const nodes = svgElement.querySelectorAll('g.node');
+            
+            nodes.forEach((node) => {
+                const nodeId = extractNodeId(node);
+                
+                // startとendはクリック不可
+                if (!nodeId || nodeId === 'start' || nodeId === 'node_end') {
+                    return;
+                }
+                
+                // クリック可能なスタイルを追加
+                const shape = node.querySelector('rect, circle, polygon');
+                if (shape) {
+                    shape.classList.add('node-clickable');
+                }
+                
+                // クリックイベントを追加
+                node.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    
+                    // ノードIDをカスタムイベントとして送信
+                    // Streamlitのコンポーネント通信プロトコルに従う
+                    const message = {
+                        type: 'node_selected',
+                        nodeId: nodeId
+                    };
+                    
+                    // Streamlitにノード選択を通知する方法
+                    // 方法1: URLパラメータを使用（最も確実）
+                    try {
+                        // StreamlitのURLを更新してクエリパラメータを追加
+                        const currentUrl = window.location.href;
+                        const url = new URL(currentUrl);
+                        url.searchParams.set('selected_node', nodeId);
+                        // Streamlitのページをリロード（クエリパラメータ付き）
+                        window.parent.location.href = url.toString();
+                    } catch (e) {
+                        // フォールバック: 親ウィンドウにメッセージを送信
+                        if (window.parent && window.parent !== window) {
+                            window.parent.postMessage({
+                                type: 'streamlit:setComponentValue',
+                                value: nodeId
+                            }, '*');
+                        }
+                    }
+                    
+                    // 同じウィンドウ内でもイベントを発火（デバッグ用）
+                    window.dispatchEvent(new CustomEvent('nodeSelected', { detail: { nodeId: nodeId } }));
+                    
+                    // ハイライト表示
+                    toggleNodeHighlight(node);
+                });
+            });
+        }
+        
+        function addCollapseFunctionality(svgElement) {
+            // subgraphの折りたたみ機能を追加
+            // Mermaid.jsが生成するSVGの構造に基づいて実装
+            
+            // subgraphのグループ要素を検出（class="cluster"を含む<g>要素）
+            const subgraphs = svgElement.querySelectorAll('g.cluster');
+            
+            subgraphs.forEach((subgraph, index) => {
+                // subgraphの境界線（rect）を検出
+                const rect = subgraph.querySelector('rect');
+                // subgraphのタイトル（text要素）を検出
+                const titleText = subgraph.querySelector('text');
+                
+                if (rect) {
+                    // 境界線をクリック可能にする
+                    rect.style.cursor = 'pointer';
+                    rect.setAttribute('data-subgraph-index', index);
+                    
+                    // タイトルもクリック可能にする
+                    if (titleText) {
+                        titleText.style.cursor = 'pointer';
+                        titleText.setAttribute('data-subgraph-index', index);
+                    }
+                    
+                    // 折りたたみ状態を管理（data属性で保存）
+                    let isCollapsed = false;
+                    
+                    const toggleCollapse = function(e) {
+                        e.stopPropagation();
+                        isCollapsed = !isCollapsed;
+                        
+                        // subgraph内のすべてのノード、エッジ、ラベルを取得
+                        // ただし、境界線（rect）とタイトル（text）は除外
+                        const subgraphContent = subgraph.querySelectorAll('g.node, g.edgeLabel, g.edgePath, path[class*="path"], line[class*="path"]');
+                        
+                        if (isCollapsed) {
+                            // 折りたたむ：subgraph内の要素を非表示
+                            subgraphContent.forEach(el => {
+                                el.style.display = 'none';
+                            });
+                            // 視覚的フィードバック：境界線のスタイルを変更
+                            rect.style.opacity = '0.5';
+                            if (titleText) {
+                                titleText.style.opacity = '0.7';
+                            }
+                        } else {
+                            // 展開する：subgraph内の要素を表示
+                            subgraphContent.forEach(el => {
+                                el.style.display = '';
+                            });
+                            rect.style.opacity = '1';
+                            if (titleText) {
+                                titleText.style.opacity = '1';
+                            }
+                        }
+                    };
+                    
+                    // クリックイベントを追加
+                    rect.addEventListener('click', toggleCollapse);
+                    if (titleText) {
+                        titleText.addEventListener('click', toggleCollapse);
+                    }
+                }
+            });
+        }
+
+        async function render(b64) {
+            const container = document.getElementById('graph');
+            try {
+                // Base64をUTF-8文字列に復号
+                const code = decodeURIComponent(escape(window.atob(b64)));
+                container.innerHTML = "";
+                
+                const id = "m" + Math.random().toString(36).substr(2, 9);
+                const { svg } = await mermaid.render(id, code);
+                container.innerHTML = svg;
+                
+                // SVG要素を取得して折りたたみ機能とノードクリック機能を追加
+                const svgElement = container.querySelector('svg');
+                if (svgElement) {
+                    // 少し遅延を入れてDOMが完全に構築されるのを待つ
+                    setTimeout(() => {
+                        addCollapseFunctionality(svgElement);
+                        addNodeClickHandler(svgElement);
+                    }, 100);
+                }
+            } catch (e) {
+                container.innerHTML = `<pre style='color:red'>Render Error: ${e.message}</pre>`;
+            }
+        }
+
+        window.addEventListener("message", (event) => {
+            if (event.data.type === "render") {
+                render(event.data.base64Code);
+            }
+        });
+        
+        // Streamlitコンポーネントからのメッセージを処理
+        // Streamlitのコンポーネント通信プロトコルに従う
+        if (window.parent) {
+            window.addEventListener("message", (event) => {
+                // Streamlitからのメッセージを処理
+                if (event.data && event.data.type === "streamlit:render") {
+                    // レンダリング処理
+                }
+            });
+        }
+    </script>
+</body>
+</html>
