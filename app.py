@@ -227,8 +227,69 @@ with col_chat:
                         raw_toon_text = client.generate_flow(combined_prompt, current_flow if append_mode_flag else None)
                         progress_bar.progress(100)
                         status_text.empty()
+                        
+                        # 質問形式の応答かチェック
+                        if client.is_question_response(raw_toon_text):
+                            # 質問回数の上限チェック
+                            st.session_state.question_count += 1
+                            if st.session_state.question_count >= MAX_QUESTION_COUNT:
+                                st.error(f"質問回数が上限（{MAX_QUESTION_COUNT}回）に達しました。セッションをリセットしてください。")
+                                st.session_state.conversation_context = None
+                                st.session_state.pending_questions = None
+                                st.session_state.question_responses = []
+                                st.session_state.question_count = 0
+                            else:
+                                # 再度質問が来た場合、セッション状態を更新
+                                st.session_state.conversation_context = combined_prompt
+                                st.session_state.pending_questions = raw_toon_text
+                                st.session_state.question_responses = []  # 新しい質問なので回答をリセット
+                                st.info(f"LLMから追加の質問がありました。回答を入力してください。（質問回数: {st.session_state.question_count}/{MAX_QUESTION_COUNT}）")
+                                st.rerun()
+                        else:
+                            # 出力サイズの検証
+                            is_valid, validation_message = client.validate_output_size(raw_toon_text)
+                            if not is_valid:
+                                st.warning(validation_message)
+                                st.info("主要なルートのみを生成するか、フローを分割することを検討してください。")
                             
-                            # 質問形式の応答かチェック
+                            # TOON形式のパース成功時のみセッション状態をリセット
+                            st.session_state.conversation_context = None
+                            st.session_state.pending_questions = None
+                            st.session_state.question_responses = []
+                            st.session_state.question_count = 0  # 質問回数もリセット
+                            
+                            # TOON形式のパース
+                            new_flow = TOONParser.parse(raw_toon_text)
+                            
+                            # 論理の穴検知を適用
+                            new_flow = new_flow.apply_logic_gap_detection()
+                            
+                            # 差分追記モードの場合
+                            if append_mode_flag:
+                                merged_flow = history_mgr.append_toon_log(session_name, new_flow)
+                                st.session_state.history.append(merged_flow)
+                                st.success(f"'{session_name}' のTOONファイルに差分を追記しました")
+                            else:
+                                # 通常モード：履歴に追加
+                                st.session_state.history.append(new_flow)
+                        
+                        st.rerun()
+                    except LLMAPIError as e:
+                        # エラー時はセッション状態を復元
+                        st.session_state.conversation_context = temp_context
+                        st.session_state.pending_questions = temp_questions
+                        st.session_state.question_responses = temp_responses
+                        st.error(f"LLM APIエラー: {e}")
+                        st.info("Ollamaが起動しているか、モデルがインストールされているか確認してください。")
+                        # エラー時はst.rerun()を呼ばない（無限ループ防止）
+                    except TOONParseError as e:
+                        # エラー時はセッション状態を復元
+                        st.session_state.conversation_context = temp_context
+                        st.session_state.pending_questions = temp_questions
+                        st.session_state.question_responses = temp_responses
+                        
+                        # 質問形式の応答の可能性をチェック
+                        if 'raw_toon_text' in locals() and raw_toon_text:
                             if client.is_question_response(raw_toon_text):
                                 # 質問回数の上限チェック
                                 st.session_state.question_count += 1
@@ -239,57 +300,30 @@ with col_chat:
                                     st.session_state.question_responses = []
                                     st.session_state.question_count = 0
                                 else:
-                                    # 再度質問が来た場合、セッション状態を更新
+                                    # 質問形式の応答だった場合
                                     st.session_state.conversation_context = combined_prompt
                                     st.session_state.pending_questions = raw_toon_text
-                                    st.session_state.question_responses = []  # 新しい質問なので回答をリセット
+                                    st.session_state.question_responses = []
                                     st.info(f"LLMから追加の質問がありました。回答を入力してください。（質問回数: {st.session_state.question_count}/{MAX_QUESTION_COUNT}）")
                                     st.rerun()
                             else:
-                                # 出力サイズの検証
-                                is_valid, validation_message = client.validate_output_size(raw_toon_text)
-                                if not is_valid:
-                                    st.warning(validation_message)
-                                    st.info("主要なルートのみを生成するか、フローを分割することを検討してください。")
-                                
-                                # TOON形式のパース成功時のみセッション状態をリセット
-                                st.session_state.conversation_context = None
-                                st.session_state.pending_questions = None
-                                st.session_state.question_responses = []
-                                st.session_state.question_count = 0  # 質問回数もリセット
-                                
-                                # TOON形式のパース
-                                new_flow = TOONParser.parse(raw_toon_text)
-                                
-                                # 論理の穴検知を適用
-                                new_flow = new_flow.apply_logic_gap_detection()
-                                
-                                # 差分追記モードの場合
-                                if append_mode_flag:
-                                    merged_flow = history_mgr.append_toon_log(session_name, new_flow)
-                                    st.session_state.history.append(merged_flow)
-                                    st.success(f"'{session_name}' のTOONファイルに差分を追記しました")
-                                else:
-                                    # 通常モード：履歴に追加
-                                    st.session_state.history.append(new_flow)
-                            
-                            st.rerun()
-                        except LLMAPIError as e:
-                            # エラー時はセッション状態を復元
-                            st.session_state.conversation_context = temp_context
-                            st.session_state.pending_questions = temp_questions
-                            st.session_state.question_responses = temp_responses
-                            st.error(f"LLM APIエラー: {e}")
-                            st.info("Ollamaが起動しているか、モデルがインストールされているか確認してください。")
-                            # エラー時はst.rerun()を呼ばない（無限ループ防止）
-                        except TOONParseError as e:
-                            # エラー時はセッション状態を復元
-                            st.session_state.conversation_context = temp_context
-                            st.session_state.pending_questions = temp_questions
-                            st.session_state.question_responses = temp_responses
-                            
-                            # 質問形式の応答の可能性をチェック
-                            if 'raw_toon_text' in locals() and raw_toon_text:
+                                st.error(f"TOON形式の解析に失敗しました: {e}")
+                                with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
+                                    st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
+                                    st.code(raw_toon_text)
+                        else:
+                            st.error(f"TOON形式の解析に失敗しました: {e}")
+                        # エラー時はst.rerun()を呼ばない（無限ループ防止）
+                    except Exception as e:
+                        # エラー時はセッション状態を復元
+                        st.session_state.conversation_context = temp_context
+                        st.session_state.pending_questions = temp_questions
+                        st.session_state.question_responses = temp_responses
+                        
+                        # 質問形式の応答の可能性をチェック
+                        if 'raw_toon_text' in locals() and raw_toon_text:
+                            try:
+                                client = LLMClient()
                                 if client.is_question_response(raw_toon_text):
                                     # 質問回数の上限チェック
                                     st.session_state.question_count += 1
@@ -300,50 +334,16 @@ with col_chat:
                                         st.session_state.question_responses = []
                                         st.session_state.question_count = 0
                                     else:
-                                        # 質問形式の応答だった場合
                                         st.session_state.conversation_context = combined_prompt
                                         st.session_state.pending_questions = raw_toon_text
                                         st.session_state.question_responses = []
-                                        st.info(f"LLMから追加の質問がありました。回答を入力してください。（質問回数: {st.session_state.question_count}/{MAX_QUESTION_COUNT}）")
+                                        st.info(f"LLMから質問がありました。回答を入力してください。（質問回数: {st.session_state.question_count}/{MAX_QUESTION_COUNT}）")
                                         st.rerun()
-                                else:
-                                    st.error(f"TOON形式の解析に失敗しました: {e}")
-                                    with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
-                                        st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
-                                        st.code(raw_toon_text)
-                            else:
-                                st.error(f"TOON形式の解析に失敗しました: {e}")
-                            # エラー時はst.rerun()を呼ばない（無限ループ防止）
-                        except Exception as e:
-                            # エラー時はセッション状態を復元
-                            st.session_state.conversation_context = temp_context
-                            st.session_state.pending_questions = temp_questions
-                            st.session_state.question_responses = temp_responses
-                            
-                            # 質問形式の応答の可能性をチェック
-                            if 'raw_toon_text' in locals() and raw_toon_text:
-                                try:
-                                    client = LLMClient()
-                                    if client.is_question_response(raw_toon_text):
-                                        # 質問回数の上限チェック
-                                        st.session_state.question_count += 1
-                                        if st.session_state.question_count >= MAX_QUESTION_COUNT:
-                                            st.error(f"質問回数が上限（{MAX_QUESTION_COUNT}回）に達しました。セッションをリセットしてください。")
-                                            st.session_state.conversation_context = None
-                                            st.session_state.pending_questions = None
-                                            st.session_state.question_responses = []
-                                            st.session_state.question_count = 0
-                                        else:
-                                            st.session_state.conversation_context = combined_prompt
-                                            st.session_state.pending_questions = raw_toon_text
-                                            st.session_state.question_responses = []
-                                            st.info(f"LLMから質問がありました。回答を入力してください。（質問回数: {st.session_state.question_count}/{MAX_QUESTION_COUNT}）")
-                                            st.rerun()
-                                except:
-                                    pass
-                            
-                            st.error(f"エラーが発生しました: {e}")
-                            # エラー時はst.rerun()を呼ばない（無限ループ防止）
+                            except:
+                                pass
+                        
+                        st.error(f"エラーが発生しました: {e}")
+                        # エラー時はst.rerun()を呼ばない（無限ループ防止）
                 else:
                     st.warning("回答を入力してください。")
         
@@ -400,8 +400,60 @@ with col_chat:
                 raw_toon_text = client.generate_flow(enhanced_prompt, context_flowchart)
                 progress_bar.progress(100)
                 status_text.empty()
+                
+                # 質問形式の応答かチェック
+                if client.is_question_response(raw_toon_text):
+                    # 質問回数の上限チェック
+                    st.session_state.question_count += 1
+                    if st.session_state.question_count >= MAX_QUESTION_COUNT:
+                        st.error(f"質問回数が上限（{MAX_QUESTION_COUNT}回）に達しました。セッションをリセットしてください。")
+                        st.session_state.conversation_context = None
+                        st.session_state.pending_questions = None
+                        st.session_state.question_responses = []
+                        st.session_state.question_count = 0
+                    else:
+                        # 質問形式の応答の場合、セッション状態に保存
+                        st.session_state.conversation_context = user_prompt
+                        st.session_state.pending_questions = raw_toon_text
+                        st.session_state.question_responses = []
+                        st.session_state.append_mode_for_question = append_mode  # 差分追記モード設定を保存
+                        st.info(f"LLMから質問がありました。回答を入力してください。（質問回数: {st.session_state.question_count}/{MAX_QUESTION_COUNT}）")
+                        st.rerun()
+                else:
+                    # 出力サイズの検証
+                    is_valid, validation_message = client.validate_output_size(raw_toon_text)
+                    if not is_valid:
+                        st.warning(validation_message)
+                        st.info("主要なルートのみを生成するか、フローを分割することを検討してください。")
                     
-                    # 質問形式の応答かチェック
+                    # TOON形式のパース
+                    new_flow = TOONParser.parse(raw_toon_text)
+                    
+                    # 論理の穴検知を適用
+                    new_flow = new_flow.apply_logic_gap_detection()
+                    
+                    # 差分追記モードの場合
+                    if append_mode:
+                        merged_flow = history_mgr.append_toon_log(session_name, new_flow)
+                        st.session_state.history.append(merged_flow)
+                        st.success(f"'{session_name}' のTOONファイルに差分を追記しました")
+                    else:
+                        # 通常モード：履歴に追加
+                        st.session_state.history.append(new_flow)
+                    
+                    # 成功時のみ質問回数をリセット
+                    st.session_state.question_count = 0
+                    st.rerun()
+            except LLMAPIError as e:
+                # LLM APIエラー
+                st.error(f"LLM APIエラー: {e}")
+                st.info("Ollamaが起動しているか、モデルがインストールされているか確認してください。")
+                # エラー時はst.rerun()を呼ばない（無限ループ防止）
+            except TOONParseError as e:
+                # TOON形式のパースエラー
+                # 質問形式の応答の可能性をチェック
+                if 'raw_toon_text' in locals() and raw_toon_text:
+                    client = LLMClient()
                     if client.is_question_response(raw_toon_text):
                         # 質問回数の上限チェック
                         st.session_state.question_count += 1
@@ -412,47 +464,47 @@ with col_chat:
                             st.session_state.question_responses = []
                             st.session_state.question_count = 0
                         else:
-                            # 質問形式の応答の場合、セッション状態に保存
+                            # 質問形式の応答だった場合、セッション状態に保存
                             st.session_state.conversation_context = user_prompt
                             st.session_state.pending_questions = raw_toon_text
                             st.session_state.question_responses = []
-                            st.session_state.append_mode_for_question = append_mode  # 差分追記モード設定を保存
                             st.info(f"LLMから質問がありました。回答を入力してください。（質問回数: {st.session_state.question_count}/{MAX_QUESTION_COUNT}）")
                             st.rerun()
                     else:
-                        # 出力サイズの検証
-                        is_valid, validation_message = client.validate_output_size(raw_toon_text)
-                        if not is_valid:
-                            st.warning(validation_message)
-                            st.info("主要なルートのみを生成するか、フローを分割することを検討してください。")
-                        
-                        # TOON形式のパース
-                        new_flow = TOONParser.parse(raw_toon_text)
-                        
-                        # 論理の穴検知を適用
-                        new_flow = new_flow.apply_logic_gap_detection()
-                        
-                        # 差分追記モードの場合
-                        if append_mode:
-                            merged_flow = history_mgr.append_toon_log(session_name, new_flow)
-                            st.session_state.history.append(merged_flow)
-                            st.success(f"'{session_name}' のTOONファイルに差分を追記しました")
-                        else:
-                            # 通常モード：履歴に追加
-                            st.session_state.history.append(new_flow)
-                        
-                        # 成功時のみ質問回数をリセット
-                        st.session_state.question_count = 0
+                        # 本当にパースエラーの場合
+                        st.error(f"TOON形式の解析に失敗しました: {e}")
+                        with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
+                            st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
+                            st.code(raw_toon_text)
+                else:
+                    st.error(f"TOON形式の解析に失敗しました: {e}")
+                # エラー時はst.rerun()を呼ばない（無限ループ防止）
+            except FlowchartValidationError as e:
+                # Flowchartバリデーションエラー（警告として表示、自動修正を試行）
+                st.warning(f"フローチャートの検証で問題を検出しました: {e}")
+                st.info("論理の穴検知で自動修正を試行します。")
+                # 自動修正を試行（既にapply_logic_gap_detectionが適用されているが、再度試行）
+                try:
+                    if 'new_flow' in locals():
+                        corrected_flow = new_flow.apply_logic_gap_detection()
+                        st.session_state.history.append(corrected_flow)
+                        st.session_state.question_count = 0  # 成功時は質問回数をリセット
+                        st.success("自動修正が完了しました。")
                         st.rerun()
-                except LLMAPIError as e:
-                    # LLM APIエラー
-                    st.error(f"LLM APIエラー: {e}")
-                    st.info("Ollamaが起動しているか、モデルがインストールされているか確認してください。")
+                except Exception as correction_error:
+                    st.error(f"自動修正に失敗しました: {correction_error}")
                     # エラー時はst.rerun()を呼ばない（無限ループ防止）
-                except TOONParseError as e:
-                    # TOON形式のパースエラー
+            except ValueError as e:
+                # その他のValueError（モデル応答エラーなど）
+                st.error(f"エラーが発生しました: {e}")
+                # エラー時はst.rerun()を呼ばない（無限ループ防止）
+            except Exception as e:
+                # 予期しないエラー
+                st.error(f"予期しないエラーが発生しました: {e}")
+                # デバッグ用：エラー時に生出力を確認できるエクスパンダーを表示
+                if 'raw_toon_text' in locals() and raw_toon_text:
                     # 質問形式の応答の可能性をチェック
-                    if 'raw_toon_text' in locals() and raw_toon_text:
+                    try:
                         client = LLMClient()
                         if client.is_question_response(raw_toon_text):
                             # 質問回数の上限チェック
@@ -470,65 +522,13 @@ with col_chat:
                                 st.session_state.question_responses = []
                                 st.info(f"LLMから質問がありました。回答を入力してください。（質問回数: {st.session_state.question_count}/{MAX_QUESTION_COUNT}）")
                                 st.rerun()
-                        else:
-                            # 本当にパースエラーの場合
-                            st.error(f"TOON形式の解析に失敗しました: {e}")
-                            with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
-                                st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
-                                st.code(raw_toon_text)
-                    else:
-                        st.error(f"TOON形式の解析に失敗しました: {e}")
-                    # エラー時はst.rerun()を呼ばない（無限ループ防止）
-                except FlowchartValidationError as e:
-                    # Flowchartバリデーションエラー（警告として表示、自動修正を試行）
-                    st.warning(f"フローチャートの検証で問題を検出しました: {e}")
-                    st.info("論理の穴検知で自動修正を試行します。")
-                    # 自動修正を試行（既にapply_logic_gap_detectionが適用されているが、再度試行）
-                    try:
-                        if 'new_flow' in locals():
-                            corrected_flow = new_flow.apply_logic_gap_detection()
-                            st.session_state.history.append(corrected_flow)
-                            st.session_state.question_count = 0  # 成功時は質問回数をリセット
-                            st.success("自動修正が完了しました。")
-                            st.rerun()
-                    except Exception as correction_error:
-                        st.error(f"自動修正に失敗しました: {correction_error}")
-                        # エラー時はst.rerun()を呼ばない（無限ループ防止）
-                except ValueError as e:
-                    # その他のValueError（モデル応答エラーなど）
-                    st.error(f"エラーが発生しました: {e}")
-                    # エラー時はst.rerun()を呼ばない（無限ループ防止）
-                except Exception as e:
-                    # 予期しないエラー
-                    st.error(f"予期しないエラーが発生しました: {e}")
-                    # デバッグ用：エラー時に生出力を確認できるエクスパンダーを表示
-                    if 'raw_toon_text' in locals() and raw_toon_text:
-                        # 質問形式の応答の可能性をチェック
-                        try:
-                            client = LLMClient()
-                            if client.is_question_response(raw_toon_text):
-                                # 質問回数の上限チェック
-                                st.session_state.question_count += 1
-                                if st.session_state.question_count >= MAX_QUESTION_COUNT:
-                                    st.error(f"質問回数が上限（{MAX_QUESTION_COUNT}回）に達しました。セッションをリセットしてください。")
-                                    st.session_state.conversation_context = None
-                                    st.session_state.pending_questions = None
-                                    st.session_state.question_responses = []
-                                    st.session_state.question_count = 0
-                                else:
-                                    # 質問形式の応答だった場合、セッション状態に保存
-                                    st.session_state.conversation_context = user_prompt
-                                    st.session_state.pending_questions = raw_toon_text
-                                    st.session_state.question_responses = []
-                                    st.info(f"LLMから質問がありました。回答を入力してください。（質問回数: {st.session_state.question_count}/{MAX_QUESTION_COUNT}）")
-                                    st.rerun()
-                        except:
-                            pass
-                        
-                        with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
-                            st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
-                            st.code(raw_toon_text)
-                    # エラー時はst.rerun()を呼ばない（無限ループ防止）
+                    except:
+                        pass
+                    
+                    with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
+                        st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
+                        st.code(raw_toon_text)
+                # エラー時はst.rerun()を呼ばない（無限ループ防止）
         else:
             st.warning("指示を入力してください。")
 
