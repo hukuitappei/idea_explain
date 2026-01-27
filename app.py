@@ -138,8 +138,7 @@ except (AttributeError, FileNotFoundError, ImportError, RuntimeError):
     model = os.getenv("OLLAMA_MODEL", "llama3.2")
     config_source = "環境変数"
 
-st.sidebar.text(f"設定元: {config_source}")
-# セキュリティのため、ベースURLは表示しない
+# セキュリティのため、設定元とベースURLは表示しない
 st.sidebar.text(f"モデル: {model}")
 
 # --- 描画と履歴管理ロジック ---
