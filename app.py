@@ -542,7 +542,7 @@ with col_flow:
     if html_path.exists():
         html_content = html_path.read_text(encoding='utf-8')
         # ノード選択用のコンポーネント（メッセージ受信用）
-        node_selection_component = components.html(
+        components.html(
             f"""
             {html_content}
             <script>
@@ -567,8 +567,7 @@ with col_flow:
             </script>
             """,
             height=800,
-            scrolling=True,
-            key="mermaid_flowchart"
+            scrolling=True
         )
         
         # コンポーネントからメッセージを受信（Streamlitの仕様に従う）
