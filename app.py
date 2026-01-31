@@ -230,22 +230,17 @@ if toon_files:
 else:
     st.sidebar.info("保存されたTOONファイルはありません")
 
-# --- デバッグ情報：Ollama設定 ---
+# --- LLM設定（OpenAI互換 / Ollama）---
 st.sidebar.divider()
-st.sidebar.subheader("⚙️ Ollama設定")
+st.sidebar.subheader("⚙️ LLM設定")
 try:
-    ollama_config = st.secrets.get("ollama", {})
-    base_url = ollama_config.get("base_url", "http://localhost:11434")
-    model = ollama_config.get("model", "llama3.2")
-    config_source = "secrets.toml"
-except (AttributeError, FileNotFoundError, ImportError, RuntimeError):
-    import os
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    model = os.getenv("OLLAMA_MODEL", "llama3.2")
-    config_source = "環境変数"
-
-# セキュリティのため、設定元とベースURLは表示しない
-st.sidebar.text(f"モデル: {model}")
+    llm_client_for_display = LLMClient()
+    st.sidebar.text(f"バックエンド: {llm_client_for_display.backend}")
+    st.sidebar.text(f"モデル: {llm_client_for_display.model}")
+except Exception:
+    # 表示用の初期化に失敗してもアプリ本体は動かす
+    st.sidebar.text("バックエンド: (unknown)")
+    st.sidebar.text("モデル: (unknown)")
 
 # --- 描画と履歴管理ロジック ---
 st.divider()
