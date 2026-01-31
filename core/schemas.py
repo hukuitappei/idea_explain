@@ -145,7 +145,12 @@ class Flowchart(BaseModel):
         return gaps
 
     def apply_logic_gap_detection(self) -> 'Flowchart':
-        """論理の穴を検出し、MISSINGノードとして追加"""
+        """論理の穴を検出し、MISSINGノードとして追加。
+
+        注意:
+        - 未定義ノード参照（edge.source/edge.targetが存在しない）は、MISSINGノードを追加するだけでなく、
+          Mermaid上で確実に可視化されるように edge の参照先を missing_* に付け替える。
+        """
         gaps = self.detect_logic_gaps()
         
         if not gaps:
@@ -160,6 +165,7 @@ class Flowchart(BaseModel):
         for gap in gaps:
             if gap.id not in existing_ids:
                 new_nodes.append(gap)
+                existing_ids.add(gap.id)
             else:
                 # 既存ノードをMISSINGとして更新
                 for i, node in enumerate(new_nodes):
@@ -172,6 +178,46 @@ class Flowchart(BaseModel):
                             subgraph_id=node.subgraph_id
                         )
                         break
+
+        # 未定義ノード参照のエッジを missing_* に付け替える（Mermaidで確実に表示するため）
+        # ここで new_nodes に missing_* を追加する可能性があるので、existing_ids を使い回す
+        for i, edge in enumerate(new_edges):
+            src = edge.source
+            tgt = edge.target
+            changed = False
+
+            if src not in existing_ids:
+                missing_id = f"missing_{src}"
+                if missing_id not in existing_ids:
+                    new_nodes.append(
+                        Node(
+                            id=missing_id,
+                            label=f"未定義: {src}",
+                            type="missing",
+                            status=NodeStatus.MISSING,
+                        )
+                    )
+                    existing_ids.add(missing_id)
+                src = missing_id
+                changed = True
+
+            if tgt not in existing_ids:
+                missing_id = f"missing_{tgt}"
+                if missing_id not in existing_ids:
+                    new_nodes.append(
+                        Node(
+                            id=missing_id,
+                            label=f"未定義: {tgt}",
+                            type="missing",
+                            status=NodeStatus.MISSING,
+                        )
+                    )
+                    existing_ids.add(missing_id)
+                tgt = missing_id
+                changed = True
+
+            if changed:
+                new_edges[i] = Edge(source=src, target=tgt, label=edge.label)
         
         return Flowchart(nodes=new_nodes, edges=new_edges, subgraphs=self.subgraphs)
 

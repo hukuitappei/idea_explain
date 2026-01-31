@@ -4,17 +4,96 @@ import base64
 from core.schemas import Node, Edge, Flowchart
 from core.llm_client import LLMClient
 from core.toon_parser import TOONParser
-from core.history_mgr import HistoryManager
 from core.exceptions import LLMAPIError, TOONParseError, FlowchartValidationError
 from core.flow_extractor import FlowExtractor
 from core.flow_merger import FlowMerger
 from pathlib import Path
+from core import config
+from core.logging_config import logger
+from core.ui.auth import resolve_user_key_or_stop
+from core.ui.persistence import init_history_store
+from core.ui.rate_limit import consume_llm_quota_or_stop
 
 st.set_page_config(layout="wide")
+
+current_user_key = resolve_user_key_or_stop(st)
+
 st.title("Flowchart Generator & History Manager")
 
-# 1. マネージャーの初期化
-history_mgr = HistoryManager()
+# 1. 永続化マネージャー（ユーザー単位）の初期化
+history_mgr = init_history_store(st, user_key=current_user_key)
+
+
+def _consume_llm_quota_or_stop() -> None:
+    consume_llm_quota_or_stop(st, history_store=history_mgr, daily_limit=config.DAILY_LLM_REQUEST_LIMIT)
+
+# --- 履歴（表示用）とコンテキスト（LLMスキャン用）の管理 ---
+def _enforce_history_limits() -> None:
+    """履歴上限とコンテキスト上限を保つ。対象外（コンテキスト外）を優先的に落とす。"""
+    history = st.session_state.history
+    flags = st.session_state.history_context_flags
+
+    # 1) コンテキスト対象(True)の上限を制限：古いTrueからFalseへ落とす
+    max_ctx = config.CONTEXT_HISTORY_MAX_LENGTH
+    true_indices = [i for i, v in enumerate(flags) if v]
+    if len(true_indices) > max_ctx:
+        for i in true_indices[0 : len(true_indices) - max_ctx]:
+            flags[i] = False
+
+    # 2) 履歴総数の上限：まず False を古い順に削除、それでも超えるなら古い順に削除
+    max_hist = config.HISTORY_MAX_LENGTH
+    while len(history) > max_hist:
+        idx = next((i for i, v in enumerate(flags) if not v), None)
+        if idx is None:
+            idx = 0
+        del history[idx]
+        del flags[idx]
+
+
+def _ensure_history_context_flags() -> None:
+    """履歴と同じ長さの context フラグ配列を用意する。"""
+    history_len = len(st.session_state.history)
+    initialized = False
+    if "history_context_flags" not in st.session_state or not isinstance(st.session_state.history_context_flags, list):
+        st.session_state.history_context_flags = [False] * history_len
+        initialized = True
+
+    flags = st.session_state.history_context_flags
+    if len(flags) != history_len:
+        new_flags = [False] * history_len
+        for i in range(min(len(flags), history_len)):
+            new_flags[i] = bool(flags[i])
+        st.session_state.history_context_flags = new_flags
+        initialized = True
+
+    # 初期化時のみデフォルトを設定: 末尾（最新）からコンテキスト対象にする
+    if initialized:
+        flags = st.session_state.history_context_flags
+        tail = min(history_len, config.CONTEXT_HISTORY_MAX_LENGTH)
+        for i in range(history_len - tail, history_len):
+            if i >= 0:
+                flags[i] = True
+
+    _enforce_history_limits()
+
+
+def append_history(flow: Flowchart, *, keep_in_context: bool = True) -> None:
+    """履歴へ追加し、上限を適用する（keep_in_context=FalseはLLMスキャン対象外）。"""
+    _ensure_history_context_flags()
+    st.session_state.history.append(flow)
+    st.session_state.history_context_flags.append(bool(keep_in_context))
+    _enforce_history_limits()
+
+
+def get_llm_context_flow(current_index: int, *, use_context: bool) -> Flowchart | None:
+    """LLMに渡すコンテキストを返す。対象外の履歴はスキャンしない（None）。"""
+    if not use_context:
+        return None
+    _ensure_history_context_flags()
+    flags = st.session_state.history_context_flags
+    if 0 <= current_index < len(flags) and flags[current_index]:
+        return st.session_state.history[current_index]
+    return None
 
 # 2. セッション履歴の初期化
 if 'history' not in st.session_state:
@@ -27,6 +106,9 @@ if 'history' not in st.session_state:
         edges=[Edge(source="start", target="node_end")]
     )
     st.session_state.history = [initial_flow]
+    st.session_state.history_context_flags = [True]
+else:
+    _ensure_history_context_flags()
 
 # 3. 質問応答のセッション管理の初期化
 if 'conversation_context' not in st.session_state:
@@ -43,7 +125,7 @@ if 'selected_node_ids' not in st.session_state:
     st.session_state.selected_node_ids = []  # 選択されたノードIDのリスト
 if 'selection_mode' not in st.session_state:
     st.session_state.selection_mode = 'text'  # 'text' or 'ui'
-MAX_QUESTION_COUNT = 5  # 質問回数の上限
+MAX_QUESTION_COUNT = config.MAX_QUESTION_COUNT  # 質問回数の上限
 
 # --- サイドバー：セッション管理 ---
 st.sidebar.header("💾 セッション管理")
@@ -54,28 +136,48 @@ saved_sessions = history_mgr.list_sessions()
 # セッション名の入力（新規作成用）
 session_name = st.sidebar.text_input("セッション名（新規作成/保存用）", value="default_session")
 
+# セッション名の検証
+if session_name:
+    if not config.SESSION_ID_PATTERN.match(session_name):
+        st.sidebar.warning("セッション名は英数字、ハイフン、アンダースコアのみ使用可能です（1-255文字）")
+
 col_save, col_load = st.sidebar.columns(2)
 with col_save:
     if st.button("保存", use_container_width=True):
-        history_mgr.save_session(session_name, st.session_state.history)
-        # 最新のFlowchartをTOON形式でも保存
-        if st.session_state.history:
-            history_mgr.save_toon_file(session_name, st.session_state.history[-1])
-        st.sidebar.success(f"'{session_name}' を保存しました")
-        st.rerun()
+        if not session_name:
+            st.sidebar.error("セッション名を入力してください")
+        elif not config.SESSION_ID_PATTERN.match(session_name):
+            st.sidebar.error("無効なセッション名です（英数字、ハイフン、アンダースコアのみ / 1-255文字）")
+        else:
+            try:
+                history_mgr.save_session(session_name, st.session_state.history)
+                # 最新のFlowchartをTOON形式でも保存
+                if st.session_state.history:
+                    history_mgr.save_toon_file(session_name, st.session_state.history[-1])
+                st.sidebar.success(f"'{session_name}' を保存しました")
+                st.rerun()
+            except ValueError as e:
+                st.sidebar.error(str(e))
+            except Exception as e:
+                st.sidebar.error(f"保存に失敗しました: {e}")
 
 with col_load:
     if st.button("削除", use_container_width=True):
-        if session_name in saved_sessions:
+        if not session_name:
+            st.sidebar.error("セッション名を入力してください")
+        elif session_name in saved_sessions:
             try:
-                json_path = history_mgr.storage_dir / f"{session_name}.json"
-                toon_path = history_mgr.toon_dir / f"{session_name}.md"
-                if json_path.exists():
-                    json_path.unlink()
-                if toon_path.exists():
-                    toon_path.unlink()
-                st.sidebar.success(f"'{session_name}' を削除しました")
-                st.rerun()
+                if not config.SESSION_ID_PATTERN.match(session_name):
+                    st.sidebar.error("無効なセッション名です")
+                else:
+                    deleted = history_mgr.delete_session(session_name)
+                    if deleted:
+                        st.sidebar.success(f"'{session_name}' を削除しました")
+                        st.rerun()
+                    else:
+                        st.sidebar.warning("削除対象が見つかりませんでした")
+            except ValueError as e:
+                st.sidebar.error(f"無効なセッション名です: {e}")
             except Exception as e:
                 st.sidebar.error(f"削除に失敗しました: {e}")
         else:
@@ -94,6 +196,9 @@ if saved_sessions:
             loaded_history = history_mgr.load_session(selected_session)
             if loaded_history:
                 st.session_state.history = loaded_history
+                if "history_context_flags" in st.session_state:
+                    del st.session_state.history_context_flags
+                _ensure_history_context_flags()
                 st.sidebar.success(f"'{selected_session}' を読み込みました")
                 st.rerun()
             else:
@@ -115,6 +220,7 @@ if toon_files:
             loaded_flow = history_mgr.load_toon_file(selected_toon)
             if loaded_flow:
                 st.session_state.history = [loaded_flow]
+                st.session_state.history_context_flags = [True]
                 st.sidebar.success(f"'{selected_toon}' を読み込みました")
                 st.rerun()
             else:
@@ -157,6 +263,18 @@ else:
     st.sidebar.info("現在は初期状態です。")
 
 current_flow = st.session_state.history[history_index]
+
+# 現在表示している履歴が「LLMコンテキスト対象（スキャン対象）」かを表示・切替
+_ensure_history_context_flags()
+current_keep_in_context = bool(st.session_state.history_context_flags[history_index])
+keep_in_context_ui = st.sidebar.checkbox(
+    "この履歴をLLMコンテキスト対象にする（対象外はスキャンしない）",
+    value=current_keep_in_context,
+)
+if bool(keep_in_context_ui) != current_keep_in_context:
+    st.session_state.history_context_flags[history_index] = bool(keep_in_context_ui)
+    _enforce_history_limits()
+    st.rerun()
 
 # 3ペイン構成: 左（Chat/Input）、中央（Flowchart）、右（Source）
 col_chat, col_flow, col_source = st.columns([1, 2, 1])
@@ -222,8 +340,10 @@ with col_chat:
                     progress_bar.progress(10)
                     
                     try:
+                        _consume_llm_quota_or_stop()
                         client = LLMClient()
-                        raw_toon_text = client.generate_flow(combined_prompt, current_flow if append_mode_flag else None)
+                        ctx_flow = get_llm_context_flow(history_index, use_context=append_mode_flag)
+                        raw_toon_text = client.generate_flow(combined_prompt, ctx_flow)
                         progress_bar.progress(100)
                         status_text.empty()
                         
@@ -266,11 +386,11 @@ with col_chat:
                             # 差分追記モードの場合
                             if append_mode_flag:
                                 merged_flow = history_mgr.append_toon_log(session_name, new_flow)
-                                st.session_state.history.append(merged_flow)
+                                append_history(merged_flow, keep_in_context=True)
                                 st.success(f"'{session_name}' のTOONファイルに差分を追記しました")
                             else:
                                 # 通常モード：履歴に追加
-                                st.session_state.history.append(new_flow)
+                                append_history(new_flow, keep_in_context=True)
                         
                         st.rerun()
                     except LLMAPIError as e:
@@ -307,9 +427,10 @@ with col_chat:
                                     st.rerun()
                             else:
                                 st.error(f"TOON形式の解析に失敗しました: {e}")
-                                with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
-                                    st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
-                                    st.code(raw_toon_text)
+                                if config.DEBUG_MODE:
+                                    with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
+                                        st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
+                                        st.code(raw_toon_text)
                         else:
                             st.error(f"TOON形式の解析に失敗しました: {e}")
                         # エラー時はst.rerun()を呼ばない（無限ループ防止）
@@ -362,6 +483,8 @@ with col_chat:
         "既存TOONファイルに差分追記（LOG）",
         help="チェックすると、既存のTOONファイルに新しいノードとエッジを追加します。"
     )
+    if append_mode and get_llm_context_flow(history_index, use_context=True) is None:
+        st.info("現在表示中の履歴はコンテキスト対象外のため、差分追記のLLMコンテキストには使用されません。")
     
     # 部分フロー生成モードの選択
     partial_mode = st.checkbox(
@@ -387,9 +510,10 @@ with col_chat:
             raw_toon_text = ""
             try:
                 # LLMとの通信
+                _consume_llm_quota_or_stop()
                 client = LLMClient()
                 # 差分追記モードの場合は既存のFlowchartをコンテキストとして渡す
-                context_flowchart = current_flow if append_mode else None
+                context_flowchart = get_llm_context_flow(history_index, use_context=append_mode)
                 
                 # 部分フロー生成モードの場合、プロンプトに追加指示を付与
                 enhanced_prompt = user_prompt
@@ -434,23 +558,25 @@ with col_chat:
                     # 差分追記モードの場合
                     if append_mode:
                         merged_flow = history_mgr.append_toon_log(session_name, new_flow)
-                        st.session_state.history.append(merged_flow)
+                        append_history(merged_flow, keep_in_context=True)
                         st.success(f"'{session_name}' のTOONファイルに差分を追記しました")
                     else:
                         # 通常モード：履歴に追加
-                        st.session_state.history.append(new_flow)
+                        append_history(new_flow, keep_in_context=True)
                     
                     # 成功時のみ質問回数をリセット
                     st.session_state.question_count = 0
                     st.rerun()
             except LLMAPIError as e:
                 # LLM APIエラー
+                logger.exception("LLM APIエラー（generate_flow）")
                 st.error(f"LLM APIエラー: {e}")
                 st.info("Ollamaが起動しているか、モデルがインストールされているか確認してください。")
                 # エラー時はst.rerun()を呼ばない（無限ループ防止）
             except TOONParseError as e:
                 # TOON形式のパースエラー
                 # 質問形式の応答の可能性をチェック
+                logger.exception("TOONParseError（generate_flow）")
                 if 'raw_toon_text' in locals() and raw_toon_text:
                     client = LLMClient()
                     if client.is_question_response(raw_toon_text):
@@ -472,33 +598,38 @@ with col_chat:
                     else:
                         # 本当にパースエラーの場合
                         st.error(f"TOON形式の解析に失敗しました: {e}")
-                        with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
-                            st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
-                            st.code(raw_toon_text)
+                        if config.DEBUG_MODE:
+                            with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
+                                st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
+                                st.code(raw_toon_text)
                 else:
                     st.error(f"TOON形式の解析に失敗しました: {e}")
                 # エラー時はst.rerun()を呼ばない（無限ループ防止）
             except FlowchartValidationError as e:
                 # Flowchartバリデーションエラー（警告として表示、自動修正を試行）
+                logger.exception("FlowchartValidationError（generate_flow）")
                 st.warning(f"フローチャートの検証で問題を検出しました: {e}")
                 st.info("論理の穴検知で自動修正を試行します。")
                 # 自動修正を試行（既にapply_logic_gap_detectionが適用されているが、再度試行）
                 try:
                     if 'new_flow' in locals():
                         corrected_flow = new_flow.apply_logic_gap_detection()
-                        st.session_state.history.append(corrected_flow)
+                        append_history(corrected_flow, keep_in_context=True)
                         st.session_state.question_count = 0  # 成功時は質問回数をリセット
                         st.success("自動修正が完了しました。")
                         st.rerun()
                 except Exception as correction_error:
+                    logger.exception("自動修正に失敗（apply_logic_gap_detection）")
                     st.error(f"自動修正に失敗しました: {correction_error}")
                     # エラー時はst.rerun()を呼ばない（無限ループ防止）
             except ValueError as e:
                 # その他のValueError（モデル応答エラーなど）
+                logger.exception("ValueError（generate_flow）")
                 st.error(f"エラーが発生しました: {e}")
                 # エラー時はst.rerun()を呼ばない（無限ループ防止）
             except Exception as e:
                 # 予期しないエラー
+                logger.exception("予期しないエラー（generate_flow）")
                 st.error(f"予期しないエラーが発生しました: {e}")
                 # デバッグ用：エラー時に生出力を確認できるエクスパンダーを表示
                 if 'raw_toon_text' in locals() and raw_toon_text:
@@ -524,9 +655,10 @@ with col_chat:
                     except:
                         pass
                     
-                    with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
-                        st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
-                        st.code(raw_toon_text)
+                    if config.DEBUG_MODE:
+                        with st.expander("🔍 LLMの生出力（デバッグ用）", expanded=True):
+                            st.info("以下のテキストをTOON形式として解釈しようとしましたが、失敗しました。")
+                            st.code(raw_toon_text)
                 # エラー時はst.rerun()を呼ばない（無限ループ防止）
         else:
             st.warning("指示を入力してください。")
@@ -565,7 +697,7 @@ with col_flow:
                 }});
             </script>
             """,
-            height=800,
+            height=config.FLOWCHART_HEIGHT,
             scrolling=True
         )
         
@@ -640,12 +772,20 @@ with col_source:
     query_params = st.query_params
     if 'selected_node' in query_params:
         selected_node_id = query_params['selected_node']
-        if selected_node_id and selected_node_id not in ["start", "node_end"]:
-            if selected_node_id in [n.id for n in current_flow.nodes]:
-                if 'selected_node_ids' not in st.session_state:
-                    st.session_state.selected_node_ids = []
-                if selected_node_id not in st.session_state.selected_node_ids:
-                    st.session_state.selected_node_ids.append(selected_node_id)
+        # Streamlitのquery_paramsの値がリストになるケースに備える
+        if isinstance(selected_node_id, list):
+            selected_node_id = selected_node_id[0] if selected_node_id else ""
+        if (
+            selected_node_id
+            and isinstance(selected_node_id, str)
+            and config.NODE_ID_PATTERN.match(selected_node_id)
+            and selected_node_id not in ["start", "node_end"]
+            and selected_node_id in [n.id for n in current_flow.nodes]
+        ):
+            if 'selected_node_ids' not in st.session_state:
+                st.session_state.selected_node_ids = []
+            if selected_node_id not in st.session_state.selected_node_ids:
+                st.session_state.selected_node_ids.append(selected_node_id)
         # クエリパラメータをクリアして再読み込みを防ぐ
         st.query_params.clear()
         if 'selected_node' in query_params:
@@ -711,6 +851,11 @@ with col_source:
                 st.error("変更指示を入力してください。")
             else:
                 try:
+                    # 現在表示中の履歴がコンテキスト対象外なら、LLMスキャン対象外として処理を止める
+                    if get_llm_context_flow(history_index, use_context=True) is None:
+                        st.error("現在表示中の履歴はコンテキスト対象外のため、LLMによる部分変更は実行できません。サイドバーでコンテキスト対象に切り替えてください。")
+                        st.stop()
+
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     status_text.info("選択範囲を変更中...（最大2分かかる場合があります）")
@@ -730,6 +875,7 @@ with col_source:
                         status_text.empty()
                     else:
                         # 2. LLMに部分変更を依頼
+                        _consume_llm_quota_or_stop()
                         client = LLMClient()
                         status_text.info("LLMが変更を生成中...")
                         progress_bar.progress(50)
@@ -756,13 +902,10 @@ with col_source:
                         progress_bar.progress(95)
                         
                         # 5. 履歴に追加
-                        history_mgr.append_toon_log(
-                            session_name,
-                            merged_flowchart
-                        )
+                        persisted_flowchart = history_mgr.append_toon_log(session_name, merged_flowchart)
                         
                         # 6. セッション状態を更新
-                        st.session_state.history = history_mgr.load_history(session_name)
+                        append_history(persisted_flowchart, keep_in_context=True)
                         st.session_state.selected_node_ids = []  # 選択をクリア
                         
                         progress_bar.progress(100)
@@ -772,15 +915,21 @@ with col_source:
                         st.rerun()
                             
                 except LLMAPIError as e:
+                    logger.exception("LLM APIエラー（partial_change）")
                     st.error(f"LLM APIエラー: {str(e)}")
                 except TOONParseError as e:
+                    logger.exception("TOON解析エラー（partial_change）")
                     st.error(f"TOON解析エラー: {str(e)}")
                 except FlowchartValidationError as e:
+                    logger.exception("フローチャート検証エラー（partial_change）")
                     st.error(f"フローチャート検証エラー: {str(e)}")
                 except Exception as e:
+                    logger.exception("予期しないエラー（partial_change）")
                     st.error(f"予期しないエラーが発生しました: {str(e)}")
                     import traceback
-                    st.code(traceback.format_exc())
+                    if config.DEBUG_MODE:
+                        st.code(traceback.format_exc())
 
-with st.sidebar.expander("現在のMermaidコードを表示"):
-    st.code(mermaid_code)
+if config.DEBUG_MODE:
+    with st.sidebar.expander("現在のMermaidコードを表示"):
+        st.code(mermaid_code)

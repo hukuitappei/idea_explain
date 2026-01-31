@@ -9,6 +9,14 @@ wheels/
 # Virtual environments
 .venv
 
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime logs
+logs/
+
 # Streamlit secrets (contains sensitive information)
 .streamlit/secrets.toml
 

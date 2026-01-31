@@ -1,5 +1,5 @@
 from typing import List
-from core.schemas import Flowchart, Node, Edge
+from core.schemas import Flowchart
 
 class FlowExtractor:
     """フローチャートから選択範囲を抽出する機能"""
@@ -17,30 +17,31 @@ class FlowExtractor:
         Returns:
             抽出されたフローチャート（部分フロー）
         """
-        # startとendノードを除外
+        # startとendノードを除外（選択対象外）
         valid_node_ids = [nid for nid in node_ids 
                          if nid not in ["start", "node_end"]]
         
-        if not valid_node_ids:
-            # 有効なノードIDがない場合は空のフローを返す
-            return Flowchart(
-                nodes=[],
-                edges=[],
-                subgraphs=None
-            )
-        
-        # 指定されたノードを抽出
-        extracted_nodes = [n for n in flowchart.nodes 
-                          if n.id in valid_node_ids]
-        
-        # 接続されているエッジを抽出
-        # 入力エッジ（sourceが選択ノード）と出力エッジ（targetが選択ノード）の両方を含める
-        extracted_edges = [e for e in flowchart.edges 
-                          if e.source in valid_node_ids or 
-                             e.target in valid_node_ids]
+        # 選択されたノードのうち、実際に存在するものだけを対象にする
+        selected_nodes = [n for n in flowchart.nodes if n.id in valid_node_ids]
+        if not selected_nodes:
+            raise ValueError("選択されたノードが見つかりませんでした。")
+
+        # Flowchartモデルのバリデーション要件（start/end必須）を満たすため、
+        # 部分フローにも start/node_end を含める（ただし変更対象ではない）
+        included_ids = {n.id for n in selected_nodes}
+        if any(n.id == "start" for n in flowchart.nodes):
+            included_ids.add("start")
+        if any(n.id == "node_end" for n in flowchart.nodes):
+            included_ids.add("node_end")
+
+        extracted_nodes = [n for n in flowchart.nodes if n.id in included_ids]
+
+        # エッジは「両端が含まれているものだけ」採用（参照先が欠けるのを防ぐ）
+        extracted_edges = [
+            e for e in flowchart.edges if e.source in included_ids and e.target in included_ids
+        ]
         
         # 部分フローチャートを作成
-        # startとendは含めない
         return Flowchart(
             nodes=extracted_nodes,
             edges=extracted_edges,
