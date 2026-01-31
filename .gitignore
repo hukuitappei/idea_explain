@@ -17,6 +17,9 @@ htmlcov/
 # Runtime logs
 logs/
 
+# Cursor SpecStory (can exceed Windows path limits on deploy)
+.specstory/
+
 # Streamlit secrets (contains sensitive information)
 .streamlit/secrets.toml
 
