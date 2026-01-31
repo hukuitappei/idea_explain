@@ -31,6 +31,13 @@ Streamlit Cloud のローカルファイルは永続性が信用できないた�
 - Supabase の **Postgres接続文字列（DSN）**
   - 例: `postgresql://postgres:<password>@<host>:5432/postgres?sslmode=require`
 
+#### 接続エラーの典型（Cannot assign requested address）
+ログに IPv6 アドレス（例: `2406:...`）が出て `Cannot assign requested address` になる場合、実行環境が IPv6 で外向き接続できていません。
+その場合は以下を試してください。
+- Supabase の **Connection string（ホスト名）** をそのまま使う（IPv6直書きにしない）
+- Supabase の **Pooler（接続プーラー）** を使う（UIにある pooler の DSN / port 6543 を利用）
+  - 接続先ホストがIPv4で解決しやすく、Streamlit Cloudで安定します。
+
 ### DBスキーマ
 アプリ起動時に **自動で `CREATE TABLE IF NOT EXISTS`** します（手動マイグレーション不要）。
 - `user_sessions`（ユーザーごとのセッション/TOON保存）

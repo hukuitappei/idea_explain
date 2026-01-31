@@ -24,9 +24,20 @@ def create_history_store(*, user_key: str, postgres_dsn: str | None, retention_d
 
     if backend in {"postgres", "supabase"}:
         if dsn:
-            return PostgresHistoryStore(dsn=dsn, user_key=user_key, retention_days=retention_days)
+            try:
+                return PostgresHistoryStore(dsn=dsn, user_key=user_key, retention_days=retention_days)
+            except Exception as e:
+                # Do not crash the whole app; fall back and surface guidance in UI.
+                logger.exception("Postgres store init failed; falling back to local store")
+                store = LocalHistoryStore(user_key=user_key)
+                setattr(store, "_postgres_unavailable_reason", str(e)[:500])
+                setattr(store, "_postgres_unavailable", True)
+                return store
         logger.warning("SESSION_STORE_BACKEND is postgres but DSN is missing; falling back to local store")
-        return LocalHistoryStore(user_key=user_key)
+        store = LocalHistoryStore(user_key=user_key)
+        setattr(store, "_postgres_unavailable_reason", "DSN is missing")
+        setattr(store, "_postgres_unavailable", True)
+        return store
 
     return LocalHistoryStore(user_key=user_key)
 

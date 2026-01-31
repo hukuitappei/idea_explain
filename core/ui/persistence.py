@@ -47,6 +47,20 @@ def init_history_store(st, *, user_key: str) -> HistoryStore:
             "⚠️ 永続ストレージが未設定です。Streamlit Cloudのファイルは永続されません。\n"
             "Supabase(Postgres)のDSNを `secrets` に設定してください。"
         )
+        # If we fell back due to connection failure, show reason and hints (no secrets).
+        if getattr(store, "_postgres_unavailable", False):
+            reason = getattr(store, "_postgres_unavailable_reason", "(unknown)")
+            st.sidebar.error(
+                "Postgres接続に失敗したため、ローカル保存にフォールバックしました。\n"
+                f"原因（要約）: {reason}\n\n"
+                "よくある原因:\n"
+                "- DSNがテンプレのまま（<host>/<password>）\n"
+                "- DBパスワード未設定/誤り\n"
+                "- IPv6アドレスへ接続しようとして失敗（Cannot assign requested address）\n"
+                "対策:\n"
+                "- SupabaseのConnection stringをそのまま貼る（hostは通常 db.<ref>.supabase.co）\n"
+                "- うまく行かない場合は Supabase の Pooler（6543）を使う/IPv4で接続する"
+            )
 
     # Retention cleanup: run once per session
     if "retention_cleanup_done" not in st.session_state:
