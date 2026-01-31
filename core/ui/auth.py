@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from core import config as app_config
 
 
@@ -48,13 +50,62 @@ def _validate_oidc_secrets_or_show_error(st) -> bool:
         )
         return False
 
+    # ---- sanity checks (avoid redacted StreamlitAuthError) ----
+    redirect_uri = str(auth.get("redirect_uri") or "").strip()
+    cookie_secret = str(auth.get("cookie_secret") or "").strip()
+    client_id = str((provider or {}).get("client_id") or "").strip()
+    client_secret = str((provider or {}).get("client_secret") or "").strip()
+    server_metadata_url = str((provider or {}).get("server_metadata_url") or "").strip()
+
+    problems: list[str] = []
+
+    # redirect_uri must end with oauth2callback
+    if not redirect_uri.startswith("https://"):
+        problems.append("redirect_uri は https:// で始めてください。")
+    if not redirect_uri.endswith("/oauth2callback"):
+        problems.append("redirect_uri は末尾を /oauth2callback にしてください。")
+
+    # cookie secret length
+    if len(cookie_secret) < 32:
+        problems.append("cookie_secret は32文字以上のランダム文字列にしてください（推奨64以上）。")
+
+    # Google client_id format (most common)
+    if "google" in server_metadata_url and not re.search(r"\.apps\.googleusercontent\.com$", client_id):
+        problems.append("Googleの client_id は末尾が .apps.googleusercontent.com の値です（例: 1234-xxxx.apps.googleusercontent.com）。")
+
+    if client_secret.strip() == "":
+        problems.append("client_secret が空です（Googleが発行した値を入れてください）。")
+
+    # Obvious placeholders
+    for key_name, value in (
+        ("client_id", client_id),
+        ("client_secret", client_secret),
+        ("cookie_secret", cookie_secret),
+    ):
+        if value.upper().startswith("CHANGE_ME") or "<" in value or ">" in value:
+            problems.append(f"{key_name} がテンプレのままです（実値を入れてください）。")
+
+    if problems:
+        st.error("OAuth(OIDC) の設定値が不正です。以下を修正してください:\n- " + "\n- ".join(problems))
+        return False
+
     return True
 
 
 def _login_callback(st) -> None:
     if not _validate_oidc_secrets_or_show_error(st):
         st.stop()
-    st.login()
+    try:
+        st.login()
+    except Exception:
+        # Streamlit may redact auth errors; show actionable next steps.
+        st.error(
+            "ログイン開始に失敗しました。\n"
+            "1) Streamlit Cloud の Secrets の [auth] 設定\n"
+            "2) Google Cloud Console の Authorized redirect URIs\n"
+            "が一致しているかを確認してください。"
+        )
+        st.stop()
 
 
 def resolve_user_key_or_stop(st) -> str:
