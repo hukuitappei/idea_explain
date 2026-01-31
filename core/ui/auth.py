@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 
 from core import config as app_config
 
@@ -17,12 +18,18 @@ def _validate_oidc_secrets_or_show_error(st) -> bool:
         auth = {}
         available_keys = []
 
-    if not isinstance(auth, dict) or not auth:
+    # Streamlit secrets use AttrDict (dict-like). Treat any Mapping as valid.
+    is_auth_mapping = isinstance(auth, Mapping)
+
+    if (not is_auth_mapping) or (not auth):
         # Values are not shown; keys only.
         keys_hint = ", ".join(sorted(available_keys)) if available_keys else "(none)"
         auth_type = type(auth).__name__
-        if isinstance(auth, dict):
-            auth_keys_hint = ", ".join(sorted(auth.keys())) if auth else "(empty)"
+        if is_auth_mapping:
+            try:
+                auth_keys_hint = ", ".join(sorted(list(auth.keys()))) if auth else "(empty)"
+            except Exception:
+                auth_keys_hint = "(unavailable)"
         elif isinstance(auth, str):
             auth_keys_hint = f"(string, len={len(auth)})"
         else:
@@ -46,7 +53,7 @@ def _validate_oidc_secrets_or_show_error(st) -> bool:
         provider = auth
     else:
         for _, v in auth.items():
-            if isinstance(v, dict) and any(v.get(k) for k in ("client_id", "client_secret", "server_metadata_url")):
+            if isinstance(v, Mapping) and any(v.get(k) for k in ("client_id", "client_secret", "server_metadata_url")):
                 provider = v
                 break
 
