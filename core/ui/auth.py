@@ -20,9 +20,17 @@ def _validate_oidc_secrets_or_show_error(st) -> bool:
     if not isinstance(auth, dict) or not auth:
         # Values are not shown; keys only.
         keys_hint = ", ".join(sorted(available_keys)) if available_keys else "(none)"
+        auth_type = type(auth).__name__
+        if isinstance(auth, dict):
+            auth_keys_hint = ", ".join(sorted(auth.keys())) if auth else "(empty)"
+        elif isinstance(auth, str):
+            auth_keys_hint = f"(string, len={len(auth)})"
+        else:
+            auth_keys_hint = "(unavailable)"
         st.error(
             "OAuth(OIDC) が未設定です。Streamlit Cloud の Secrets に `[auth]` を設定してください。\n\n"
             f"診断: 現在アプリから見えている Secrets のキー: {keys_hint}\n"
+            f"診断: st.secrets['auth'] の型: {auth_type}, サブキー: {auth_keys_hint}\n"
             "（値は表示しません。TOMLの壊れ/保存漏れ/別アプリ編集の可能性が高いです）"
         )
         return False
