@@ -34,7 +34,24 @@ class PostgresHistoryStore(HistoryStore):
         import psycopg  # available in dev env; required in production
 
         # autocommit off; we commit explicitly
-        return psycopg.connect(self.dsn)
+        try:
+            return psycopg.connect(self.dsn)
+        except Exception as e:
+            # Streamlit Cloud may not have outbound IPv6. If DNS resolves to IPv6 first,
+            # libpq can fail with "Cannot assign requested address" without retrying IPv4.
+            msg = str(e)
+            if "Cannot assign requested address" not in msg:
+                raise
+
+            try:
+                dsn_ipv4 = _dsn_with_ipv4_hostaddr(self.dsn)
+                if dsn_ipv4 and dsn_ipv4 != self.dsn:
+                    logger.warning("Retrying Postgres connect using IPv4 hostaddr fallback")
+                    return psycopg.connect(dsn_ipv4)
+            except Exception:
+                # If fallback fails, re-raise original error
+                pass
+            raise
 
     def _ensure_schema(self) -> None:
         try:
@@ -252,6 +269,58 @@ def _json_dump(obj) -> str:
     import json
 
     return json.dumps(obj, ensure_ascii=False)
+
+
+def _dsn_with_ipv4_hostaddr(dsn: str) -> str | None:
+    """Return a DSN that forces IPv4 by adding hostaddr=... when DSN is a postgres URI.
+
+    Keeps the original hostname for TLS/SNI while providing an IPv4 address for connect().
+    """
+    dsn = (dsn or "").strip()
+    if not dsn:
+        return None
+
+    if dsn.startswith(("postgresql://", "postgres://")):
+        import socket
+        from urllib.parse import parse_qsl, urlencode, urlsplit
+
+        parts = urlsplit(dsn)
+        host = parts.hostname
+        if not host or ":" in host:
+            # hostname missing or already IPv6 literal
+            return None
+        port = parts.port or 5432
+
+        infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+        if not infos:
+            return None
+        ipv4 = infos[0][4][0]
+
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query["hostaddr"] = ipv4
+        new_query = urlencode(query, doseq=True)
+        return parts._replace(query=new_query).geturl()
+
+    # keyword conninfo (best-effort)
+    try:
+        import socket
+
+        kv = {}
+        for token in dsn.split():
+            if "=" in token:
+                k, v = token.split("=", 1)
+                kv[k.strip()] = v.strip()
+        host = kv.get("host")
+        if not host or ":" in host:
+            return None
+        port = int(kv.get("port", "5432"))
+        infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+        if not infos:
+            return None
+        kv["hostaddr"] = infos[0][4][0]
+        return " ".join(f"{k}={v}" for k, v in kv.items())
+    except Exception:
+        return None
 
 
 def _normalize_flowchart_dict(item: dict) -> dict:

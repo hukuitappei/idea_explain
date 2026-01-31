@@ -226,3 +226,50 @@ def test_postgres_history_store_with_fake_psycopg(monkeypatch):
 
     assert store.delete_session(session_id) is True
 
+
+def test_postgres_connect_retries_with_ipv4_hostaddr(monkeypatch):
+    """Ensure IPv4 fallback is attempted on IPv6 connect errors."""
+
+    from core.persistence.postgres_store import PostgresHistoryStore
+
+    calls: list[str] = []
+
+    class DummyConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakePsycopg:
+        @staticmethod
+        def connect(conninfo: str):
+            calls.append(conninfo)
+            if len(calls) == 1:
+                raise Exception(
+                    'connection to server at "2406:da18:243:7426:f70d:bac5:9683:92a6", port 5432 failed: Cannot assign requested address'
+                )
+            return DummyConn()
+
+    # Inject fake psycopg module used in _connect()
+    import sys
+
+    sys.modules["psycopg"] = FakePsycopg  # type: ignore[assignment]
+
+    # Avoid real DNS; return a deterministic IPv4
+    import socket
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port, *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.2.3.4", port))],
+    )
+
+    store = PostgresHistoryStore.__new__(PostgresHistoryStore)
+    store.dsn = "postgresql://postgres:pw@db.example.com:5432/postgres?sslmode=require"
+
+    conn = store._connect()
+    assert conn is not None
+    assert len(calls) == 2
+    assert "hostaddr=1.2.3.4" in calls[1]
+
